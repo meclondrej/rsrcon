@@ -1,14 +1,15 @@
 use std::{
     fmt::Display,
-    io::{stdin, stdout, BufRead, StdinLock, StdoutLock, Write},
+    io::{self, stdin, stdout, BufRead, StdinLock, StdoutLock, Write},
     net::SocketAddr,
     process::exit,
     time::Duration,
 };
 
 use clap::{value_parser, Arg, ArgMatches, Command};
-use protocol::{ConnectionParameters, Protocol};
+use protocol::{ConnectionParameters, Protocol, TransmissionResult};
 use protocols::source::Source;
+use thiserror::Error;
 use util::fatal;
 
 mod protocol;
@@ -16,23 +17,28 @@ mod protocols;
 mod tcp_util;
 mod util;
 
-const STDOUT_WRITE_FAILURE_MSG: &str = "cannot write to stdout";
-const STDIN_WRITE_FAILURE_MSG: &str = "cannot read from stdin";
+#[derive(Error, Debug)]
+pub enum ReadCommandError {
+    #[error("cannot write to stdout")]
+    StdoutWriteError(io::Error),
+    #[error("cannot read from stdin")]
+    StdinReadError(io::Error),
+}
 
-pub fn read_command() -> String {
+pub fn read_command() -> Result<String, ReadCommandError> {
     let mut stdout: StdoutLock<'_> = stdout().lock();
-    stdout
-        .write_all(b"> ")
-        .unwrap_or_else(|_| fatal(STDOUT_WRITE_FAILURE_MSG));
-    stdout
-        .flush()
-        .unwrap_or_else(|_| fatal(STDOUT_WRITE_FAILURE_MSG));
+    if let Err(err) = stdout.write_all(b"> ") {
+        return Err(ReadCommandError::StdoutWriteError(err));
+    }
+    if let Err(err) = stdout.flush() {
+        return Err(ReadCommandError::StdoutWriteError(err));
+    }
     let mut input: String = String::new();
     let mut stdin: StdinLock<'_> = stdin().lock();
-    stdin
-        .read_line(&mut input)
-        .unwrap_or_else(|_| fatal(STDIN_WRITE_FAILURE_MSG));
-    input.trim().to_owned()
+    if let Err(err) = stdin.read_line(&mut input) {
+        return Err(ReadCommandError::StdinReadError(err));
+    }
+    Ok(input.trim().to_owned())
 }
 
 pub fn print_response(response: &str) {
@@ -52,10 +58,10 @@ impl ProtocolType {
             _ => None,
         }
     }
-    pub fn connect(&self, params: ConnectionParameters) -> Box<dyn Protocol> {
-        match self {
-            Self::Source => Box::new(Source::connect(params)),
-        }
+    pub fn connect(&self, params: ConnectionParameters) -> anyhow::Result<Box<dyn Protocol>> {
+        Ok(match self {
+            Self::Source => Box::new(Source::connect(params)?),
+        })
     }
 }
 
@@ -132,20 +138,26 @@ pub fn main() {
         .get_one::<u64>("timeout")
         .map(|timeout_ms: &u64| Duration::from_millis(*timeout_ms))
         .unwrap_or(DEFAULT_TIMEOUT);
-    let mut protocol: Box<dyn Protocol> = protocol_type.connect(ConnectionParameters {
-        dest,
-        timeout,
-        password,
-    });
+    let mut protocol: Box<dyn Protocol> = protocol_type
+        .connect(ConnectionParameters {
+            dest,
+            timeout,
+            password,
+        })
+        .unwrap_or_else(|err| fatal(&format!("{err}")));
     println!("Type your command or \"disconnect\" to disconnect");
     loop {
-        let command: String = read_command();
+        let command: String = read_command().unwrap_or_else(|err| fatal(&format!("{err}")));
         if command == "disconnect" {
-            protocol.disconnect();
+            protocol
+                .disconnect()
+                .unwrap_or_else(|err| fatal(&format!("{err}")));
             exit(0);
         }
-        if let Some(response) = protocol.transmission(command) {
-            print_response(&response);
+        match protocol.transmission(command) {
+            TransmissionResult::Success { response } => print_response(&response),
+            TransmissionResult::Error(err) => eprintln!("{err}"),
+            TransmissionResult::Fatal(err) => fatal(&format!("{err}")),
         }
     }
 }

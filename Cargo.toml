@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0.94"
 clap = "4.5.22"
 rpassword = "7.3.1"
+thiserror = "2.0.5"
 
 [profile.release]
 lto = true

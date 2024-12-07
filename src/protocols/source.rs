@@ -1,13 +1,14 @@
 use std::{
-    io::{Read, Write},
-    net::TcpStream,
+    io::{self, Write},
+    net::{self, TcpStream},
     str,
 };
 
+use thiserror::Error;
+
 use crate::{
-    protocol::Protocol,
-    tcp_util::{fatal_with_stream_shutdown, is_errorkind_timeout, shutdown_stream},
-    util::fatal,
+    protocol::{Protocol, TransmissionResult},
+    tcp_util::{is_errorkind_timeout, stream_read, StreamReadError},
 };
 
 #[allow(non_camel_case_types)]
@@ -42,13 +43,19 @@ pub struct Packet {
     pub body: String,
 }
 
+#[derive(Error, Debug)]
 pub enum PacketToBytesError {
+    #[error("the packet is too large")]
     TooLarge,
 }
 
+#[derive(Error, Debug)]
 pub enum PacketFromBytesError {
+    #[error("the packet is malformed")]
     MalformedPacket,
+    #[error("the packet contains non-utf8 text")]
     Utf8Error,
+    #[error("the packet is of invalid type")]
     InvalidPacketType,
 }
 
@@ -103,51 +110,54 @@ impl Packet {
     }
 }
 
-pub fn send_packet(stream: &mut TcpStream, packet: &Packet) -> Result<(), PacketToBytesError> {
+#[derive(Error, Debug)]
+pub enum SendPacketError {
+    #[error("failed to convert packet to bytes: {0}")]
+    PacketToBytesError(PacketToBytesError),
+    #[error("write to stream timed out")]
+    Timeout,
+    #[error("failed to write to stream: {0}")]
+    StreamWriteFailure(io::Error),
+}
+
+pub fn send_packet(stream: &mut TcpStream, packet: &Packet) -> Result<(), SendPacketError> {
     let bytes: Vec<u8> = match packet.to_bytes() {
         Ok(bytes) => bytes,
-        Err(PacketToBytesError::TooLarge) => return Err(PacketToBytesError::TooLarge),
+        Err(err) => return Err(SendPacketError::PacketToBytesError(err)),
     };
     match stream.write_all(&bytes) {
-        Err(err) if is_errorkind_timeout(err.kind()) => {
-            fatal_with_stream_shutdown(stream, "write to stream timed out")
-        }
-        Err(err) => fatal_with_stream_shutdown(stream, &format!("write to stream failed: {}", err)),
+        Err(err) if is_errorkind_timeout(err.kind()) => Err(SendPacketError::Timeout),
+        Err(err) => Err(SendPacketError::StreamWriteFailure(err)),
         _ => Ok(()),
     }
 }
 
-pub fn stream_read(stream: &mut TcpStream, data: &mut [u8]) {
-    match stream.read_exact(data) {
-        Err(err) if is_errorkind_timeout(err.kind()) => {
-            fatal_with_stream_shutdown(stream, "read from stream timed out")
-        }
-        Err(err) => {
-            fatal_with_stream_shutdown(stream, &format!("read from stream failed: {}", err))
-        }
-        _ => (),
-    };
+#[derive(Error, Debug)]
+pub enum ReceivePacketError {
+    #[error("failed to read from stream")]
+    StreamReadError(StreamReadError),
+    #[error("negative size received")]
+    NegativeSizeReceived,
+    #[error("failed to convert packet to bytes: {0}")]
+    PacketFromBytesError(PacketFromBytesError),
 }
 
-pub fn receive_packet(stream: &mut TcpStream) -> Packet {
+pub fn receive_packet(stream: &mut TcpStream) -> Result<Packet, ReceivePacketError> {
     let mut size: [u8; size_of::<i32>()] = [0; size_of::<i32>()];
-    stream_read(stream, &mut size);
+    if let Err(err) = stream_read(stream, &mut size) {
+        return Err(ReceivePacketError::StreamReadError(err));
+    }
     let size: i32 = i32::from_le_bytes(size);
     if size < 0 {
-        fatal_with_stream_shutdown(stream, "negative size received");
+        return Err(ReceivePacketError::NegativeSizeReceived);
     }
     let mut incoming_bytes: Vec<u8> = vec![0; size as usize];
-    stream_read(stream, &mut incoming_bytes);
+    if let Err(err) = stream_read(stream, &mut incoming_bytes) {
+        return Err(ReceivePacketError::StreamReadError(err));
+    }
     match Packet::from_incoming_bytes(&incoming_bytes) {
-        Ok(packet) => packet,
-        Err(err) => fatal_with_stream_shutdown(
-            stream,
-            match err {
-                PacketFromBytesError::MalformedPacket => "received malformed packet",
-                PacketFromBytesError::Utf8Error => "received non-utf8 text",
-                PacketFromBytesError::InvalidPacketType => "received invalid response packet type",
-            },
-        ),
+        Ok(packet) => Ok(packet),
+        Err(err) => Err(ReceivePacketError::PacketFromBytesError(err)),
     }
 }
 
@@ -155,42 +165,69 @@ pub struct Source {
     pub stream: TcpStream,
 }
 
+#[derive(Error, Debug)]
+pub enum ConnectError {
+    #[error("cannot connect to the server: {0}")]
+    ServerConnectionFailure(io::Error),
+    #[error("failed to set stream read timeout: {0}")]
+    ReadTimeoutSetFailure(io::Error),
+    #[error("failed to set stream write timeout: {0}")]
+    WriteTimeoutSetFailure(io::Error),
+    #[error("failed to send packet: {0}")]
+    SendPacketError(SendPacketError),
+    #[error("failed to receive packet: {0}")]
+    ReceivePacketError(ReceivePacketError),
+    #[error("failed to authenticate, incorrect password")]
+    IncorrectPassword,
+}
+
+#[derive(Error, Debug)]
+pub enum TransmissionError {
+    #[error("the packet is too large")]
+    PacketTooLarge,
+}
+
+#[derive(Error, Debug)]
+pub enum TransmissionFatal {
+    #[error("failed to send packet: {0}")]
+    SendPacketError(SendPacketError),
+    #[error("failed to receive packet: {0}")]
+    ReceivePacketError(ReceivePacketError),
+}
+
 impl Protocol for Source {
-    fn connect(params: crate::protocol::ConnectionParameters) -> Self {
-        let mut stream: TcpStream = TcpStream::connect_timeout(&params.dest, params.timeout)
-            .unwrap_or_else(|err| fatal(&format!("cannot connect to the server: {}", err)));
-        stream
-            .set_read_timeout(Some(params.timeout))
-            .unwrap_or_else(|err| {
-                fatal_with_stream_shutdown(
-                    &stream,
-                    &format!("cannot set stream read timeout: {}", err),
-                )
-            });
-        stream
-            .set_write_timeout(Some(params.timeout))
-            .unwrap_or_else(|err| {
-                fatal_with_stream_shutdown(
-                    &stream,
-                    &format!("cannot set stream write timeout: {}", err),
-                )
-            });
+    fn connect(params: crate::protocol::ConnectionParameters) -> anyhow::Result<Self> {
+        let mut stream: TcpStream = match TcpStream::connect_timeout(&params.dest, params.timeout) {
+            Ok(stream) => stream,
+            Err(err) => return Err(ConnectError::ServerConnectionFailure(err).into()),
+        };
+        if let Err(err) = stream.set_read_timeout(Some(params.timeout)) {
+            return Err(ConnectError::ReadTimeoutSetFailure(err).into());
+        }
+        if let Err(err) = stream.set_write_timeout(Some(params.timeout)) {
+            return Err(ConnectError::WriteTimeoutSetFailure(err).into());
+        }
         let auth_request_packet: Packet = Packet {
             id: 1,
             packet_type: PacketType::SERVERDATA_AUTH,
             body: params.password.to_owned(),
         };
-        if let Err(PacketToBytesError::TooLarge) = send_packet(&mut stream, &auth_request_packet) {
-            fatal_with_stream_shutdown(&stream, "auth request packet too large");
+        if let Err(err) = send_packet(&mut stream, &auth_request_packet) {
+            return Err(ConnectError::SendPacketError(err).into());
         }
-        receive_packet(&mut stream);
-        let auth_response_packet: Packet = receive_packet(&mut stream);
+        if let Err(err) = receive_packet(&mut stream) {
+            return Err(ConnectError::ReceivePacketError(err).into());
+        }
+        let auth_response_packet: Packet = match receive_packet(&mut stream) {
+            Ok(packet) => packet,
+            Err(err) => return Err(ConnectError::ReceivePacketError(err).into()),
+        };
         if auth_response_packet.id == -1 {
-            fatal_with_stream_shutdown(&stream, "incorrect password");
+            return Err(ConnectError::IncorrectPassword.into());
         }
-        Self { stream }
+        Ok(Self { stream })
     }
-    fn transmission(&mut self, command: String) -> Option<String> {
+    fn transmission(&mut self, command: String) -> TransmissionResult {
         let empty_packet: Packet = Packet {
             id: 1,
             packet_type: PacketType::SERVERDATA_RESPONSE_VALUE,
@@ -201,27 +238,45 @@ impl Protocol for Source {
             packet_type: PacketType::SERVERDATA_EXECCOMMAND,
             body: command,
         };
-        if let Err(PacketToBytesError::TooLarge) = send_packet(&mut self.stream, &packet) {
-            println!("packet too large");
-            return None;
+        match send_packet(&mut self.stream, &packet) {
+            Err(SendPacketError::PacketToBytesError(PacketToBytesError::TooLarge)) => {
+                return TransmissionResult::Error(TransmissionError::PacketTooLarge.into())
+            }
+            Err(err) => {
+                return TransmissionResult::Fatal(TransmissionFatal::SendPacketError(err).into())
+            }
+            _ => (),
         }
-        if let Err(PacketToBytesError::TooLarge) = send_packet(&mut self.stream, &empty_packet) {
-            fatal_with_stream_shutdown(&self.stream, "blank packet is too large");
+        if let Err(err) = send_packet(&mut self.stream, &empty_packet) {
+            return TransmissionResult::Fatal(TransmissionFatal::SendPacketError(err).into());
         }
         let mut packet_counter: u32 = 0;
         let mut response_segments: Vec<String> = Vec::new();
         loop {
-            let packet: Packet = receive_packet(&mut self.stream);
+            let packet: Packet = match receive_packet(&mut self.stream) {
+                Ok(packet) => packet,
+                Err(err) => {
+                    return TransmissionResult::Fatal(
+                        TransmissionFatal::ReceivePacketError(err).into(),
+                    )
+                }
+            };
             if packet_counter > 0 && packet.body.is_empty() {
                 break;
             }
             response_segments.push(packet.body);
             packet_counter += 1;
         }
-        receive_packet(&mut self.stream);
-        Some(response_segments.join(""))
+        if let Err(err) = receive_packet(&mut self.stream) {
+            return TransmissionResult::Fatal(TransmissionFatal::ReceivePacketError(err).into());
+        }
+        TransmissionResult::Success {
+            response: response_segments.join(""),
+        }
     }
-    fn disconnect(&mut self) {
-        shutdown_stream(&self.stream);
+    fn disconnect(&mut self) -> anyhow::Result<()> {
+        self.stream
+            .shutdown(net::Shutdown::Both)
+            .map_err(anyhow::Error::from)
     }
 }
