@@ -82,7 +82,7 @@ const DEFAULT_PROTOCOL_TYPE: ProtocolType = ProtocolType::Source;
 
 pub fn main() {
     let args: ArgMatches = Command::new("rsrcon")
-        .about("A simple Source RCON client written in rust")
+        .about("A simple RCON client written in rust")
         .arg(
             Arg::new("dest")
                 .help("address of the server to connect to")
