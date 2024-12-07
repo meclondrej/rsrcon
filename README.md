@@ -1,5 +1,5 @@
 # rsrcon
-A simple Source RCON client written in rust
+A simple RCON client written in rust
 
 ## OS Compatibility
 
