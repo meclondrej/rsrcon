@@ -1,6 +1,14 @@
 # rsrcon
 A simple RCON client written in rust
 
+## Protocol Compatibility
+
+Protocol|Compatibility
+-|-
+Source|Supported
+Goldsrc|Supported
+Minecraft|Planned
+
 ## OS Compatibility
 
 This crate uses TCP functionality from `std`, so it should be compatible with most untested OSes.
