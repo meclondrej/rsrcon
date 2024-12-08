@@ -8,7 +8,7 @@ use std::{
 
 use clap::{value_parser, Arg, ArgMatches, Command};
 use protocol::{ConnectionParameters, Protocol, TransmissionResult};
-use protocols::source::Source;
+use protocols::{goldsrc::Goldsrc, source::Source};
 use thiserror::Error;
 use util::fatal;
 
@@ -49,18 +49,21 @@ pub fn print_response(response: &str) {
 
 pub enum ProtocolType {
     Source,
+    Goldsrc
 }
 
 impl ProtocolType {
     pub fn from_string(string: &str) -> Option<Self> {
         match string {
             "source" => Some(Self::Source),
+            "goldsrc" => Some(Self::Goldsrc),
             _ => None,
         }
     }
     pub fn connect(&self, params: ConnectionParameters) -> anyhow::Result<Box<dyn Protocol>> {
         Ok(match self {
             Self::Source => Box::new(Source::connect(params)?),
+            Self::Goldsrc => Box::new(Goldsrc::connect(params)?),
         })
     }
 }
@@ -72,6 +75,7 @@ impl Display for ProtocolType {
             "{}",
             match self {
                 Self::Source => "source",
+                Self::Goldsrc => "goldsrc",
             }
         )
     }
