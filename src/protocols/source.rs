@@ -93,18 +93,13 @@ impl Packet {
                 .try_into()
                 .unwrap(),
         );
-        let body: &str = match std::str::from_utf8(
-            &bytes[2 * size_of::<i32>()..bytes.len() - (2 * size_of::<u8>())],
-        ) {
-            Ok(body) => body,
-            Err(_) => return Err(PacketFromBytesError::Utf8Error),
-        };
+        let body: &str =
+            std::str::from_utf8(&bytes[2 * size_of::<i32>()..bytes.len() - (2 * size_of::<u8>())])
+                .map_err(|_| PacketFromBytesError::Utf8Error)?;
         Ok(Self {
             id,
-            packet_type: match PacketType::from_incoming_numeric(packet_type) {
-                Some(packet_type) => packet_type,
-                None => return Err(PacketFromBytesError::InvalidPacketType),
-            },
+            packet_type: PacketType::from_incoming_numeric(packet_type)
+                .ok_or(PacketFromBytesError::InvalidPacketType)?,
             body: body.to_owned(),
         })
     }
@@ -121,10 +116,9 @@ pub enum SendPacketError {
 }
 
 pub fn send_packet(stream: &mut TcpStream, packet: &Packet) -> Result<(), SendPacketError> {
-    let bytes: Vec<u8> = match packet.to_bytes() {
-        Ok(bytes) => bytes,
-        Err(err) => return Err(SendPacketError::PacketToBytesError(err)),
-    };
+    let bytes: Vec<u8> = packet
+        .to_bytes()
+        .map_err(SendPacketError::PacketToBytesError)?;
     match stream.write_all(&bytes) {
         Err(err) if is_errorkind_timeout(err.kind()) => Err(SendPacketError::Timeout),
         Err(err) => Err(SendPacketError::StreamWriteFailure(err)),
@@ -144,21 +138,14 @@ pub enum ReceivePacketError {
 
 pub fn receive_packet(stream: &mut TcpStream) -> Result<Packet, ReceivePacketError> {
     let mut size: [u8; size_of::<i32>()] = [0; size_of::<i32>()];
-    if let Err(err) = stream_read(stream, &mut size) {
-        return Err(ReceivePacketError::StreamReadError(err));
-    }
+    stream_read(stream, &mut size).map_err(ReceivePacketError::StreamReadError)?;
     let size: i32 = i32::from_le_bytes(size);
     if size < 0 {
         return Err(ReceivePacketError::NegativeSizeReceived);
     }
     let mut incoming_bytes: Vec<u8> = vec![0; size as usize];
-    if let Err(err) = stream_read(stream, &mut incoming_bytes) {
-        return Err(ReceivePacketError::StreamReadError(err));
-    }
-    match Packet::from_incoming_bytes(&incoming_bytes) {
-        Ok(packet) => Ok(packet),
-        Err(err) => Err(ReceivePacketError::PacketFromBytesError(err)),
-    }
+    stream_read(stream, &mut incoming_bytes).map_err(ReceivePacketError::StreamReadError)?;
+    Packet::from_incoming_bytes(&incoming_bytes).map_err(ReceivePacketError::PacketFromBytesError)
 }
 
 pub struct Source {
@@ -197,31 +184,23 @@ pub enum TransmissionFatal {
 
 impl Protocol for Source {
     fn connect(params: crate::protocol::ConnectionParameters) -> anyhow::Result<Self> {
-        let mut stream: TcpStream = match TcpStream::connect_timeout(&params.dest, params.timeout) {
-            Ok(stream) => stream,
-            Err(err) => return Err(ConnectError::ServerConnectionFailure(err).into()),
-        };
-        if let Err(err) = stream.set_read_timeout(Some(params.timeout)) {
-            return Err(ConnectError::ReadTimeoutSetFailure(err).into());
-        }
-        if let Err(err) = stream.set_write_timeout(Some(params.timeout)) {
-            return Err(ConnectError::WriteTimeoutSetFailure(err).into());
-        }
+        let mut stream: TcpStream = TcpStream::connect_timeout(&params.dest, params.timeout)
+            .map_err(ConnectError::ServerConnectionFailure)?;
+        stream
+            .set_read_timeout(Some(params.timeout))
+            .map_err(ConnectError::ReadTimeoutSetFailure)?;
+        stream
+            .set_write_timeout(Some(params.timeout))
+            .map_err(ConnectError::WriteTimeoutSetFailure)?;
         let auth_request_packet: Packet = Packet {
             id: 1,
             packet_type: PacketType::SERVERDATA_AUTH,
             body: params.password.to_owned(),
         };
-        if let Err(err) = send_packet(&mut stream, &auth_request_packet) {
-            return Err(ConnectError::SendPacketError(err).into());
-        }
-        if let Err(err) = receive_packet(&mut stream) {
-            return Err(ConnectError::ReceivePacketError(err).into());
-        }
-        let auth_response_packet: Packet = match receive_packet(&mut stream) {
-            Ok(packet) => packet,
-            Err(err) => return Err(ConnectError::ReceivePacketError(err).into()),
-        };
+        send_packet(&mut stream, &auth_request_packet).map_err(ConnectError::SendPacketError)?;
+        receive_packet(&mut stream).map_err(ConnectError::ReceivePacketError)?;
+        let auth_response_packet: Packet =
+            receive_packet(&mut stream).map_err(ConnectError::ReceivePacketError)?;
         if auth_response_packet.id == -1 {
             return Err(ConnectError::IncorrectPassword.into());
         }
