@@ -7,7 +7,10 @@ use std::{
 
 use thiserror::Error;
 
-use crate::{protocol::{Protocol, TransmissionResult}, tcp_util::is_errorkind_timeout};
+use crate::{
+    protocol::{Protocol, TransmissionResult},
+    tcp_util::is_errorkind_timeout,
+};
 
 const PREFIX: [u8; 4] = [0xFF; 4];
 const CHALLENGE: &[u8; 20] = b"\xFF\xFF\xFF\xFFchallenge rcon\n\0";
@@ -36,7 +39,8 @@ pub fn extract_challenge_id(mut challenge: &[u8]) -> Result<&str, ChallengeIdExt
 pub fn make_command_packet(command: &str, password: &str, challenge_id: &str) -> Vec<u8> {
     let mut packet: Vec<u8> = Vec::new();
     packet.extend_from_slice(&PREFIX);
-    packet.extend_from_slice(&format!("rcon {} \"{}\" {}\0", challenge_id, password, command).into_bytes());
+    packet
+        .append(&mut format!("rcon {} \"{}\" {}\0", challenge_id, password, command).into_bytes());
     packet
 }
 
@@ -116,7 +120,6 @@ impl Goldsrc {
             Err(err) if is_errorkind_timeout(err.kind()) => Err(DataSendError::Timeout),
             Err(err) => Err(DataSendError::SendFailure(err)),
         }
-        
     }
     pub fn receive_data(&self) -> Result<Vec<u8>, DataReceiveError> {
         let mut buffer: Vec<u8> = vec![0; RECV_BUFFER_SIZE];
@@ -199,7 +202,9 @@ impl Protocol for Goldsrc {
     {
         let socket: UdpSocket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0)))
             .map_err(ConnectError::SocketBindFailure)?;
-        socket.set_nonblocking(false).map_err(ConnectError::SetBlockingFailure)?;
+        socket
+            .set_nonblocking(false)
+            .map_err(ConnectError::SetBlockingFailure)?;
         socket
             .set_read_timeout(Some(params.timeout))
             .map_err(ConnectError::ReadTimeoutSetFailure)?;

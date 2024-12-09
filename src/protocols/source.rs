@@ -201,7 +201,8 @@ impl Protocol for Source {
         send_packet(&mut stream, &auth_request_packet).map_err(ConnectError::SendPacketError)?;
         let auth_response_packet: Packet;
         loop {
-            let received_packet: Packet = receive_packet(&mut stream).map_err(ConnectError::ReceivePacketError)?;
+            let received_packet: Packet =
+                receive_packet(&mut stream).map_err(ConnectError::ReceivePacketError)?;
             if received_packet.packet_type == PacketType::SERVERDATA_AUTH_RESPONSE {
                 auth_response_packet = received_packet;
                 break;

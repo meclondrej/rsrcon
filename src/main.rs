@@ -49,7 +49,7 @@ pub fn print_response(response: &str) {
 
 pub enum ProtocolType {
     Source,
-    Goldsrc
+    Goldsrc,
 }
 
 impl ProtocolType {
