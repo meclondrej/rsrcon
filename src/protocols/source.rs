@@ -12,6 +12,7 @@ use crate::{
 };
 
 #[allow(non_camel_case_types)]
+#[derive(PartialEq)]
 pub enum PacketType {
     SERVERDATA_AUTH,
     SERVERDATA_EXECCOMMAND,
@@ -198,9 +199,14 @@ impl Protocol for Source {
             body: params.password.to_owned(),
         };
         send_packet(&mut stream, &auth_request_packet).map_err(ConnectError::SendPacketError)?;
-        receive_packet(&mut stream).map_err(ConnectError::ReceivePacketError)?;
-        let auth_response_packet: Packet =
-            receive_packet(&mut stream).map_err(ConnectError::ReceivePacketError)?;
+        let auth_response_packet: Packet;
+        loop {
+            let received_packet: Packet = receive_packet(&mut stream).map_err(ConnectError::ReceivePacketError)?;
+            if received_packet.packet_type == PacketType::SERVERDATA_AUTH_RESPONSE {
+                auth_response_packet = received_packet;
+                break;
+            }
+        }
         if auth_response_packet.id == -1 {
             return Err(ConnectError::IncorrectPassword.into());
         }
