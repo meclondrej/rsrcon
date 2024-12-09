@@ -208,8 +208,8 @@ impl Protocol for Source {
     }
     fn transmission(&mut self, command: String) -> TransmissionResult {
         let empty_packet: Packet = Packet {
-            id: 1,
-            packet_type: PacketType::SERVERDATA_RESPONSE_VALUE,
+            id: 2,
+            packet_type: PacketType::SERVERDATA_EXECCOMMAND,
             body: String::new(),
         };
         let packet: Packet = Packet {
@@ -229,7 +229,6 @@ impl Protocol for Source {
         if let Err(err) = send_packet(&mut self.stream, &empty_packet) {
             return TransmissionResult::Fatal(TransmissionFatal::SendPacketError(err).into());
         }
-        let mut packet_counter: u32 = 0;
         let mut response_segments: Vec<String> = Vec::new();
         loop {
             let packet: Packet = match receive_packet(&mut self.stream) {
@@ -240,14 +239,10 @@ impl Protocol for Source {
                     )
                 }
             };
-            if packet_counter > 0 && packet.body.is_empty() {
+            if packet.id == 2 {
                 break;
             }
             response_segments.push(packet.body);
-            packet_counter += 1;
-        }
-        if let Err(err) = receive_packet(&mut self.stream) {
-            return TransmissionResult::Fatal(TransmissionFatal::ReceivePacketError(err).into());
         }
         TransmissionResult::Success {
             response: response_segments.join(""),
