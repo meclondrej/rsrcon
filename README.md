@@ -7,7 +7,7 @@ Protocol|Compatibility
 -|-
 Source|Supported
 Goldsrc|Supported
-Minecraft|Planned
+Minecraft|Supported
 
 ## Usage
 
