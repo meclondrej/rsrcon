@@ -183,8 +183,8 @@ pub enum TransmissionFatal {
     ReceivePacketError(ReceivePacketError),
 }
 
-impl Protocol for Source {
-    fn connect(params: crate::protocol::ConnectionParameters) -> anyhow::Result<Self> {
+impl Source {
+    pub fn connect(params: crate::protocol::ConnectionParameters) -> anyhow::Result<Self> {
         let mut stream: TcpStream = TcpStream::connect_timeout(&params.dest, params.timeout)
             .map_err(ConnectError::ServerConnectionFailure)?;
         stream
@@ -213,6 +213,9 @@ impl Protocol for Source {
         }
         Ok(Self { stream })
     }
+}
+
+impl Protocol for Source {
     fn transmission(&mut self, command: String) -> TransmissionResult {
         let empty_packet: Packet = Packet {
             id: 2,

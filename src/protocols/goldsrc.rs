@@ -195,11 +195,8 @@ pub enum TransmissionFatal {
     InvokeCommand(InvokeCommandError),
 }
 
-impl Protocol for Goldsrc {
-    fn connect(params: crate::protocol::ConnectionParameters) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
+impl Goldsrc {
+    pub fn connect(params: crate::protocol::ConnectionParameters) -> anyhow::Result<Self> {
         let socket: UdpSocket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0)))
             .map_err(ConnectError::SocketBindFailure)?;
         socket
@@ -237,6 +234,9 @@ impl Protocol for Goldsrc {
             }
         }
     }
+}
+
+impl Protocol for Goldsrc {
     fn transmission(&mut self, command: String) -> TransmissionResult {
         let challenge_id: String = match self.challenge() {
             Ok(id) => id,

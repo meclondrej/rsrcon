@@ -15,9 +15,6 @@ pub enum TransmissionResult {
 }
 
 pub trait Protocol {
-    fn connect(params: ConnectionParameters) -> anyhow::Result<Self>
-    where
-        Self: Sized;
     fn transmission(&mut self, command: String) -> TransmissionResult;
     fn disconnect(&mut self) -> anyhow::Result<()>;
 }
