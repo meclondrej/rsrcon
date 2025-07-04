@@ -185,9 +185,6 @@ pub enum ConnectError {
 }
 
 #[derive(Error, Debug)]
-pub enum TransmissionError {}
-
-#[derive(Error, Debug)]
 pub enum TransmissionFatal {
     #[error("failed to get challenge id: {0}")]
     Challenge(ChallengeError),
